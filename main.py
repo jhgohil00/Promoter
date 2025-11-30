@@ -32,7 +32,7 @@ SESSION_STRING = os.environ.get("SESSION_STRING") # Paste long string in Render
 
 BOT_USERNAME = 'chatbot' 
 MAX_MESSAGES = 10           
-PROMO_TRIGGER = 4           
+PROMO_TRIGGER = 6           
 
 PERSONAS = [
     {"id": "indo", "country": "Indonesia", "role": "Female, 19, Jakarta slang. Shy.", "greetings": ["hai", "halo", "iya?"]},
@@ -205,4 +205,5 @@ def main():
     client.run_until_disconnected()
 
 if __name__ == '__main__':
+
     main()
