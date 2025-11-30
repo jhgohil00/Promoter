@@ -1,4 +1,3 @@
 telethon
 groq
-flask
-asyncio
+aiohttp
