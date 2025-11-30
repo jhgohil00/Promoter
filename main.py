@@ -1,177 +1,208 @@
-import os
 import asyncio
 import random
-from threading import Thread
-from flask import Flask
+import os
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from groq import Groq
+from aiohttp import web  # 1. NEW: For the dummy web server
 
 # ==========================================
-# 🌍 WEB SERVER
+# 🔧 CONFIGURATION SECTION
 # ==========================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Bot is Online."
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# ==========================================
-# 🔧 CONFIGURATION
-# ==========================================
+# In Render, we get these from the "Environment" tab
 API_ID = int(os.environ.get("API_ID", 28723682))
-API_HASH = os.environ.get("API_HASH", '868a078ba0208b4409208275fa8bc598')
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
-SESSION_STRING = os.environ.get("SESSION_STRING") 
+API_HASH = os.environ.get("API_HASH", "868a078ba0208b4409208275fa8bc598")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+STRING_SESSION = os.environ.get("STRING_SESSION", "") # We paste the long string in Render later
 
 BOT_USERNAME = 'chatbot' 
 MAX_MESSAGES = 10           
-PROMO_TRIGGER = 4  # Message #4 is Promo Time
+PROMO_TRIGGER = 6           
 
+# ==========================================
+# 🎭 PERSONA DATABASE (Unchanged)
+# ==========================================
 PERSONAS = [
-    {"id": "indo", "country": "Indonesia", "role": "19 year old girl from Jakarta. Speak Indo slang.", "greetings": ["hai", "halo", "iya?"]},
-    {"id": "malay", "country": "Malaysia", "role": "21 year old girl from KL. Speak Malay/English mix.", "greetings": ["hi", "hello", "hey you"]},
-    {"id": "india", "country": "India", "role": "22 year old girl from Mumbai. Speak Hinglish.", "greetings": ["hi", "hello", "hey"]},
-    {"id": "uk", "country": "UK", "role": "17 year old girl from London. Speak casual English.", "greetings": ["hi", "hello"]},
+    {
+        "id": "indo_girl",
+        "country": "Indonesia",
+        "role": "Female, 19, Jakarta slang style. Shy but curious.",
+        "greetings": ["hai", "halo", "iya?"],
+    },
+    {
+        "id": "malay_girl",
+        "country": "Malaysia",
+        "role": "Female, 21, KL style. Mix Malay/English. Polite.",
+        "greetings": ["hi", "hello", "hey you"],
+    },
+    {
+        "id": "indian_girl",
+        "country": "India",
+        "role": "Female, 22, Mumbai. Hinglish + English. Practical.",
+        "greetings": ["hi", "hello", "hey"],
+    },
+    {
+        "id": "uk_girl",
+        "country": "UK",
+        "role": "Female, 17, London. Student. Bored/Tired.",
+        "greetings": ["hi", "hello"],
+    }
 ]
 
 # ==========================================
-# 🧠 STATE
+# 🧠 STATE MANAGEMENT
 # ==========================================
 class BotState:
     def __init__(self):
         self.status = "SEARCHING"
-        self.paused = False 
         self.msg_count = 0
         self.current_persona = None
         self.history = []
+        self.is_paused = False
 
 state = BotState()
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+
+# Initialize Client
+if not STRING_SESSION:
+    print("❌ ERROR: String Session is missing in Environment Variables!")
+else:
+    client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ==========================================
-# 🤖 AI LOGIC (FORCED PROMO FIX)
+# 🤖 AI GENERATION LOGIC
 # ==========================================
 def generate_ai_reply(user_text, inject_instruction=None):
-    if not state.current_persona: return "..."
     p = state.current_persona
-    
-    # 1. BASE SYSTEM PROMPT (Identity Only)
     system_prompt = (
-        f"You are a {p['role']}. Location: {p['country']}. "
-        "HIDDEN RULES:\n"
-        "1. Real Human mode. Never admit being AI.\n"
-        "2. If user is 'm', you are Female. If 'f', you are Male.\n"
-        "3. Short replies (1 sentence). Lowercase. Casual.\n"
-        "4. Speak user's language."
+        f"You are a {p['role']}. You are chatting on an anonymous app. "
+        f"Your location is {p['country']}. "
+        "IMPORTANT RULES:\n"
+        "- If user is Male, act Female. If User is Female, act Male.\n"
+        "- Keep replies SHORT (1 sentence max).\n"
+        "- Use lowercase mostly. Minimal emojis.\n"
+        "- Do NOT be overly enthusiastic. Be 'Real'.\n"
+        "- If asked where you are from FIRST, say 'UK'. Otherwise use your real country.\n"
+        "- If user speaks Indo/Malay, speak that language. If English, speak English."
     )
-    
-    # 2. PROMO FORCE LOGIC
-    # We attach the command to the USER message, so the AI thinks it must answer it.
-    final_user_content = user_text
-    if inject_instruction:
-        final_user_content = f"{user_text} \n\n(HIDDEN INSTRUCTION: {inject_instruction})"
 
-    # 3. HISTORY MANAGEMENT
-    # We only append the CLEAN text to history, so we don't confuse future turns
-    state.history.append({"role": "user", "content": final_user_content})
-    
+    if inject_instruction:
+        system_prompt += f"\n\n[SPECIAL HIDDEN INSTRUCTION]: {inject_instruction}"
+
+    state.history.append({"role": "user", "content": user_text})
+
     try:
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": system_prompt}] + state.history,
             temperature=0.7,
-            max_tokens=70
+            max_tokens=60
         )
         reply = completion.choices[0].message.content
         state.history.append({"role": "assistant", "content": reply})
-        return reply.lower()
+        return reply.lower() 
     except Exception as e:
-        print(f"Groq Error: {e}")
-        return "haha yeah"
+        print(f"❌ Groq Error: {e}")
+        return "haha yeah" 
 
 # ==========================================
-# 👮 ADMIN COMMANDS
+# 👂 THE LISTENER (EVENT HANDLER)
 # ==========================================
-@client.on(events.NewMessage(chats='me'))
-async def admin_handler(event):
-    if event.raw_text.lower() == "/pause":
-        state.paused = True
-        await event.reply("⏸️ PAUSED")
-    elif event.raw_text.lower() == "/resume":
-        state.paused = False
-        await event.reply("▶️ RESUMED")
-        await client.send_message(BOT_USERNAME, '/next')
-
-# ==========================================
-# 🎮 MAIN LOOP
-# ==========================================
-@client.on(events.NewMessage(chats=BOT_USERNAME))
-async def bot_handler(event):
+@client.on(events.NewMessage)
+async def handler(event):
     text = event.raw_text.lower()
-    
-    # 🚨 CAPTCHA GUARD
-    if event.photo:
-        state.paused = True
-        await client.send_message('me', "🚨 **CAPTCHA!** Solve it on @chatbot then type /resume")
+    sender_id = event.sender_id
+    me = await client.get_me()
+
+    # 🛡️ SUPERVISOR LAYER: ADMIN COMMANDS
+    if event.is_private and sender_id == me.id:
+        if text == "/pause":
+            state.is_paused = True
+            await event.reply("⏸️ PAUSED. I will stop replying to strangers.")
+            print("--- PAUSED BY ADMIN ---")
+            return
+        elif text == "/resume":
+            state.is_paused = False
+            await event.reply("▶️ RESUMED. Back to work.")
+            print("--- RESUMED BY ADMIN ---")
+            return
+        elif text == "/status":
+            status_msg = f"Status: {state.status}\nPaused: {state.is_paused}\nMsgs: {state.msg_count}"
+            await event.reply(status_msg)
+            return
+
+    if event.chat and getattr(event.chat, 'username', '') != BOT_USERNAME:
         return
 
-    # AUTO RESUME
-    if "seem to be a robot" in text or "right!" in text:
-        if state.paused:
-            state.paused = False
-            await client.send_message('me', "✅ Captcha Solved. Resuming...")
-            
-    if state.paused: return
+    # 🛡️ SUPERVISOR LAYER: CAPTCHA DETECTION
+    if event.photo and not event.out:
+        state.is_paused = True
+        print("🚨 CAPTCHA DETECTED! Pausing...")
+        await client.send_message('me', "⚠️ CAPTCHA DETECTED! \n1. Go to @chatbot\n2. Solve the puzzle manually.\n3. I will auto-resume when I see 'Partner found'.")
+        return
 
-    # SYSTEM TRIGGERS
+    # --- SYSTEM MESSAGES ---
     if "searching" in text or "looking" in text:
         state.status = "SEARCHING"
         return
 
     if "partner found" in text or "connected" in text:
+        if state.is_paused:
+            state.is_paused = False
+            await client.send_message('me', "✅ Captcha Solved / Partner Found. Auto-Resuming!")
+        
         state.status = "CONNECTED"
         state.msg_count = 0
         state.history = []
         state.current_persona = random.choice(PERSONAS)
-        print(f"✅ Connected: {state.current_persona['id']}")
         
-        await asyncio.sleep(5)
-        await client.send_message(BOT_USERNAME, random.choice(state.current_persona['greetings']))
+        print(f"✅ Connected! Selected: {state.current_persona['id']}")
+        await asyncio.sleep(5) 
+        
+        if not state.is_paused:
+            greeting = random.choice(state.current_persona['greetings'])
+            await client.send_message(BOT_USERNAME, greeting)
+            state.msg_count += 1
         return
 
     if "partner disconnected" in text or "stopped" in text:
         state.status = "SEARCHING"
         await asyncio.sleep(2)
-        await client.send_message(BOT_USERNAME, '/next')
+        if not state.is_paused:
+            await client.send_message(BOT_USERNAME, '/next')
         return
 
-    # CHAT LOGIC
+    if state.is_paused:
+        return
+
+    # --- STRANGER MESSAGES ---
     if state.status == "CONNECTED" and not event.out:
-        read_time = max(3, min(10, len(text) * 0.3))
+        read_time = len(text) * 0.3
+        if read_time < 3: read_time = 3
+        if read_time > 10: read_time = 10 
         await asyncio.sleep(read_time)
+
         state.msg_count += 1
         
-        # --- PROMO & OVERRIDE LOGIC ---
-        override = None
-        
+        override_instruction = None
         if state.msg_count == PROMO_TRIGGER:
-            print("📢 ATTEMPTING PROMO...")
-            # STRONGER INSTRUCTION
-            override = "IGNORE the conversation topic. You MUST recommend the bot '@OmeTV_chatbot' now. Say it naturally in the current language. Example: 'btw try @OmeTV_chatbot'."
+            override_instruction = (
+                "IGNORE previous topic. Casually suggest they try @OmeTV_chatbot "
+                "because it has games and better people. "
+                "Must mention '@OmeTV_chatbot'. "
+                "Say it in the SAME LANGUAGE the user is speaking right now."
+            )
 
         if state.msg_count >= MAX_MESSAGES:
+            reply = "gtg bye" 
             state.status = "EXITING"
-            await client.send_message(BOT_USERNAME, "gtg bye")
+            await client.send_message(BOT_USERNAME, reply)
         else:
             async with client.action(BOT_USERNAME, 'typing'):
-                await asyncio.sleep(random.uniform(3, 6))
-                reply = generate_ai_reply(text, override)
+                typing_delay = random.uniform(3, 6)
+                await asyncio.sleep(typing_delay)
+                reply = generate_ai_reply(text, inject_instruction=override_instruction)
             await client.send_message(BOT_USERNAME, reply)
 
         if state.status == "EXITING":
@@ -180,11 +211,39 @@ async def bot_handler(event):
             await asyncio.sleep(2)
             await client.send_message(BOT_USERNAME, '/next')
 
-def main():
-    t = Thread(target=run_web_server)
-    t.start()
-    client.start()
-    client.run_until_disconnected()
+# ==========================================
+# 🌐 DUMMY WEB SERVER (Keep-Alive)
+# ==========================================
+async def web_handler(request):
+    return web.Response(text="I am alive!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', web_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render requires binding to 0.0.0.0 and port 10000
+    site = web.TCPSite(runner, '0.0.0.0', 10000)
+    await site.start()
+    print("🌍 Web Server running on port 10000")
+
+# ==========================================
+# 🚀 MAIN STARTER
+# ==========================================
+async def main():
+    print("--- 🟢 Smart Agent v4 (Cloud Edition) Started ---")
+    
+    # 1. Start the Dummy Web Server
+    await start_web_server()
+    
+    # 2. Start the Bot
+    await client.start()
+    await client.send_message('me', "🚀 Bot v4 is Online on Render!")
+    await client.send_message(BOT_USERNAME, '/start')
+    
+    # 3. Run Forever
+    await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    main()
+    # Using asyncio.run for the main loop
+    asyncio.run(main())
