@@ -4,23 +4,22 @@ import os
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from groq import Groq
-from aiohttp import web  # 1. NEW: For the dummy web server
+from aiohttp import web 
 
 # ==========================================
 # 🔧 CONFIGURATION SECTION
 # ==========================================
-# In Render, we get these from the "Environment" tab
 API_ID = int(os.environ.get("API_ID", 28723682))
 API_HASH = os.environ.get("API_HASH", "868a078ba0208b4409208275fa8bc598")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-STRING_SESSION = os.environ.get("STRING_SESSION", "") # We paste the long string in Render later
+STRING_SESSION = os.environ.get("STRING_SESSION", "") 
 
 BOT_USERNAME = 'chatbot' 
 MAX_MESSAGES = 10           
 PROMO_TRIGGER = 6           
 
 # ==========================================
-# 🎭 PERSONA DATABASE (Unchanged)
+# 🎭 PERSONA DATABASE
 # ==========================================
 PERSONAS = [
     {
@@ -88,7 +87,8 @@ def generate_ai_reply(user_text, inject_instruction=None):
     )
 
     if inject_instruction:
-        system_prompt += f"\n\n[SPECIAL HIDDEN INSTRUCTION]: {inject_instruction}"
+        # We emphasize the instruction to ensure it doesn't accidentally add an '@'
+        system_prompt += f"\n\n[URGENT INSTRUCTION]: {inject_instruction}"
 
     state.history.append({"role": "user", "content": user_text})
 
@@ -97,7 +97,7 @@ def generate_ai_reply(user_text, inject_instruction=None):
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": system_prompt}] + state.history,
             temperature=0.7,
-            max_tokens=60
+            max_tokens=80 # Increased slightly for the specific promo text
         )
         reply = completion.choices[0].message.content
         state.history.append({"role": "assistant", "content": reply})
@@ -185,14 +185,38 @@ async def handler(event):
 
         state.msg_count += 1
         
+        # --- PROMO LOGIC (STEALTH MODE) ---
         override_instruction = None
         if state.msg_count == PROMO_TRIGGER:
+            
+            # 🎲 1. Randomize the "Obfuscated Name"
+            # We break the words so the system doesn't see "chatbot" or "ometv"
+            stealth_names = [
+                "OmeTV chatb o t", 
+                "Ome TV cha t bo t", 
+                "Ome-TV b o t",
+                "Ometv:chat with strangers", 
+                "Ome_TV b0t",
+                "Ome TV new b ot"
+            ]
+            chosen_name = random.choice(stealth_names)
+            
+            # 📝 2. Randomize the "Instruction Style"
+            prompts = [
+                f"Tell them to search for '{chosen_name}' on telegram (with spaces).",
+                f"Say u found a better bot called '{chosen_name}'.",
+                f"Ask if they have tried '{chosen_name}' yet.",
+                f"Tell them this bot is dead and to go to '{chosen_name}'."
+            ]
+            selected_prompt = random.choice(prompts)
+            
             override_instruction = (
-                "IGNORE previous topic. Casually suggest they try @OmeTV_chatbot "
-                "because it has games and better people. "
-                "Must mention '@OmeTV_chatbot'. "
-                "Say it in the SAME LANGUAGE the user is speaking right now."
+                f"IGNORE previous topic. {selected_prompt} "
+                "IMPORTANT: Do NOT use the '@' symbol. "
+                "Write the bot name EXACTLY as I showed you with the spaces. "
+                "Keep it short and lowercase."
             )
+            print(f"📢 Triggering Safe Promo: {chosen_name}")
 
         if state.msg_count >= MAX_MESSAGES:
             reply = "gtg bye" 
@@ -222,7 +246,6 @@ async def start_web_server():
     app.router.add_get('/', web_handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    # Render requires binding to 0.0.0.0 and port 10000
     site = web.TCPSite(runner, '0.0.0.0', 10000)
     await site.start()
     print("🌍 Web Server running on port 10000")
@@ -231,19 +254,12 @@ async def start_web_server():
 # 🚀 MAIN STARTER
 # ==========================================
 async def main():
-    print("--- 🟢 Smart Agent v4 (Cloud Edition) Started ---")
-    
-    # 1. Start the Dummy Web Server
+    print("--- 🟢 Smart Agent v4 (Stealth Edition) Started ---")
     await start_web_server()
-    
-    # 2. Start the Bot
     await client.start()
-    await client.send_message('me', "🚀 Bot v4 is Online on Render!")
+    await client.send_message('me', "🚀 Bot v4 (Stealth Mode) is Online!")
     await client.send_message(BOT_USERNAME, '/start')
-    
-    # 3. Run Forever
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Using asyncio.run for the main loop
     asyncio.run(main())
