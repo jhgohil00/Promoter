@@ -9,14 +9,23 @@ from aiohttp import web
 # ==========================================
 # 🔧 CONFIGURATION SECTION
 # ==========================================
-API_ID = int(os.environ.get("API_ID", 28723682))
-API_HASH = os.environ.get("API_HASH", "868a078ba0208b4409208275fa8bc598")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-STRING_SESSION = os.environ.get("STRING_SESSION", "") 
+import os
+
+# We access the variables directly. 
+# If these are missing in Render, the bot will stop with a 'KeyError' (which is safer).
+try:
+    API_ID = int(os.environ["API_ID"])
+    API_HASH = os.environ["API_HASH"]
+    GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+    STRING_SESSION = os.environ["STRING_SESSION"]
+except KeyError as e:
+    print(f"❌ CRITICAL ERROR: Missing Environment Variable: {e}")
+    print("Please go to Render Dashboard -> Environment and add this variable.")
+    exit(1)
 
 BOT_USERNAME = 'chatbot' 
 MAX_MESSAGES = 10           
-PROMO_TRIGGER = 6           
+PROMO_TRIGGER = 6      
 
 # ==========================================
 # 🎭 PERSONA DATABASE
@@ -263,3 +272,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
